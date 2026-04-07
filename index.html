@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>简易逻辑分析仪 - Web版</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/theme-chalk/dark/css-vars.css">
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/uplot/dist/uPlot.min.css">
+    <script src="https://unpkg.com/uplot/dist/uPlot.iife.min.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; background-color: #141414; color: #E5EAF3; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
+        #app { display: flex; height: 100vh; }
+        .sidebar { width: 280px; background-color: #1D1E22; padding: 20px; box-sizing: border-box; border-right: 1px solid #333; }
+        .main-view { flex: 1; position: relative; display: flex; flex-direction: column; }
+        .plot-container { flex: 1; width: 100%; height: 100%; }
+        .el-form-item__label { color: #A3A6AD !important; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div class="sidebar">
+        <h2 style="margin-top:0; color:#409EFF;">Logic Analyzer</h2>
+        <el-divider></el-divider>
+
+        <el-form label-position="top">
+            <el-form-item label="目标硬件端口">
+        <el-select v-model="selectedPort" placeholder="请选择或手动输入端口 (如 COM3)" style="width: 100%;" :disabled="isRunning" filterable allow-create default-first-option>
+                    <el-option v-for="port in portsList" :key="port" :label="port" :value="port"></el-option>
+                </el-select>
+            </el-form-item>
+
+            <el-button type="primary" plain @click="fetchPorts" :disabled="isRunning" style="width: 100%; margin-bottom: 20px;">
+                扫描可用端口
+            </el-button>
+
+            <el-button type="success" @click="startCapture" :disabled="isRunning || !selectedPort" style="width: 100%; margin-bottom: 10px;">
+                启动接收 (115200 bps)
+            </el-button>
+            <el-button type="danger" @click="stopCapture" :disabled="!isRunning" style="width: 100%;">
+                停止接收
+            </el-button>
+        </el-form>
+    </div>
+
+    <div class="main-view" ref="plotWrapper">
+        <div style="padding: 10px; background: #2b2d30; color: #67C23A; border-bottom: 1px solid #333; display: flex; justify-content: space-between;">
+    <span>测量工具 (鼠标在波形区域横向拖拽框选计算)</span>
+    <span id="measure-result">ΔX: 0 样本 | ΔT: 0 μs | 频率 f: 0 kHz</span>
+</div>
+        <div id="uplot-div" class="plot-container"></div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            const portsList = ref([]);
+            const selectedPort = ref('');
+            const isRunning = ref(false);
+
+            let ws = null;
+            let uplotInst = null;
+            const API_BASE = 'http://127.0.0.1:8000';
+            const WS_BASE = 'ws://127.0.0.1:8000';
+
+            // 1. HTTP 接口请求：获取端口列表
+            const fetchPorts = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/ports`);
+                    const data = await res.json();
+                    if(data.status === "success") {
+                        portsList.value = data.data;
+                        if(portsList.value.length > 0) selectedPort.value = portsList.value[0];
+                        ElementPlus.ElMessage.success('端口刷新成功');
+                    }
+                } catch (e) {
+                    ElementPlus.ElMessage.error('无法连接到后端服务');
+                }
+            };
+
+            // 2. HTTP 接口请求：启动硬件连接并建立 WebSocket
+            const startCapture = async () => {
+                if(!selectedPort.value) return;
+                try {
+                    const res = await fetch(`${API_BASE}/api/connect?port=${selectedPort.value}&baudrate=115200`, {method: 'POST'});
+                    const data = await res.json();
+
+                    if(data.status === "success") {
+                        isRunning.value = true;
+                        ElementPlus.ElMessage.success(data.msg);
+                        initWebSocket();
+                    } else {
+                        ElementPlus.ElMessage.error(data.msg);
+                    }
+                } catch (e) {
+                    ElementPlus.ElMessage.error('启动失败，请检查后端状态');
+                }
+            };
+
+            // 3. HTTP 接口请求：断开硬件
+            const stopCapture = async () => {
+                try {
+                    await fetch(`${API_BASE}/api/disconnect`, {method: 'POST'});
+                    isRunning.value = false;
+                    if(ws) ws.close();
+                    ElementPlus.ElMessage.warning('采集已停止');
+                } catch (e) {}
+            };
+
+            // 4. WebSocket 数据流接收处理
+            const initWebSocket = () => {
+                ws = new WebSocket(`${WS_BASE}/ws/data`);
+                ws.onmessage = (event) => {
+                    const packet = JSON.parse(event.data);
+                    if(packet.type === "waveform" && uplotInst) {
+                        const bitMatrix = packet.data; // 后端发来的 8x2048 数组
+
+                        // 构建 uPlot 要求的 [x_array, y0_array, y1_array...] 数据格式
+                        // 假设 2048 点深度
+                        const depth = bitMatrix[0].length;
+                        let x_data = Array.from({length: depth}, (_, i) => i);
+                        let plot_data = [x_data];
+
+                        for(let ch=0; ch<8; ch++) {
+                            // 核心：加上垂直偏移量 (ch * 2)，实现波形堆叠
+                            let offsetData = bitMatrix[ch].map(val => val + (ch * 2));
+                            plot_data.push(offsetData);
+                        }
+
+                        // 极速重绘
+                        uplotInst.setData(plot_data);
+                    }
+                };
+                ws.onerror = () => { ElementPlus.ElMessage.error('WebSocket连接异常'); };
+            };
+
+            // 5. 初始化 uPlot 画布
+            const initPlot = () => {
+                // 定义8种高对比度工业荧光色
+                const colors = ['#F56C6C', '#E6A23C', '#5CB87A', '#1989FA', '#67C23A', '#909399', '#D4A4EB', '#00CED1'];
+
+                let seriesConfig = [ {} ]; // x轴配置
+                let axesConfig = [ { stroke: "#c0c0c0", grid: { stroke: "#333", width: 1 } } ]; // x轴网格
+
+                // y轴配置：生成 CH0-CH7 标签映射
+                let yTicks = [];
+                for(let i=0; i<8; i++) {
+                    yTicks.push([i * 2 + 0.5, `CH${i}`]);
+                    seriesConfig.push({
+                        label: `CH${i}`,
+                        stroke: colors[i],
+                        width: 2,
+                        paths: uPlot.paths.stepped({align: 1}) // 核心：使用逻辑分析仪专用的阶跃连线模式
+                    });
+                }
+
+                axesConfig.push({
+                    stroke: "#c0c0c0",
+                    grid: { stroke: "#333", width: 1 },
+                    splits: yTicks.map(t => t[0]),
+                    values: (u, vals) => vals.map(v => {
+                        let match = yTicks.find(t => t[0] === v);
+                        return match ? match[1] : '';
+                    })
+                });
+
+                const opts = {
+    title: "Signal Monitor",
+    width: document.getElementById('uplot-div').clientWidth,
+    height: document.getElementById('uplot-div').clientHeight - 40, // 减去测量栏高度
+    padding: [20, 20, 20, 20],
+    scales: { x: { time: false }, y: { range: [0, 16] } },
+    series: seriesConfig,
+    axes: axesConfig,
+    cursor: { sync: { key: "moo" } },
+    select: { show: true }, // 允许出现半透明框选区
+    // 【核心新增】：挂载框选结束后的换算算法
+    hooks: {
+        setSelect: [
+            (u) => {
+                const min = u.posToVal(u.select.left, 'x');
+                const max = u.posToVal(u.select.left + u.select.width, 'x');
+                const deltaSamples = Math.abs(max - min);
+
+                if(deltaSamples > 0) {
+                    // 假设当前 FPGA 的扫描间隔 (Ts) 为 1微秒 (1MHz 采样率)
+                    const Ts_us = 1.0;
+                    const deltaT_us = deltaSamples * Ts_us;
+
+                    // 频率计算 f = 1 / T，将微秒转为 kHz
+                    const freq_kHz = 1000 / deltaT_us;
+
+                    document.getElementById('measure-result').innerHTML =
+                        `ΔX: ${deltaSamples.toFixed(1)} 样本 | ` +
+                        `ΔT: ${deltaT_us.toFixed(2)} μs | ` +
+                        `频率 f: ${freq_kHz.toFixed(2)} kHz`;
+                }
+            }
+        ]
+    }
+};
+
+                // 注入伪空数据以初始化画布网格
+                let initData = [Array.from({length: 2048}, (_, i) => i)];
+                for(let i=0; i<8; i++) initData.push(Array(2048).fill(null));
+
+                uplotInst = new uPlot(opts, initData, document.getElementById('uplot-div'));
+// --- 在 initPlot 函数内部，uplotInst 实例化之后添加以下代码 ---
+
+// 1. 获取 uPlot 专门用于捕获鼠标交互的 DOM 遮罩层
+const over = uplotInst.over;
+
+// 2. 绑定原生鼠标滚轮事件
+over.addEventListener("wheel", (e) => {
+    e.preventDefault(); // 阻断网页原生的上下滚动
+
+    const u = uplotInst;
+
+    // 获取当前 X 轴的显示范围
+    let xMin = u.scales.x.min;
+    let xMax = u.scales.x.max;
+
+    // 获取交互层在屏幕上的绝对位置
+    const rect = over.getBoundingClientRect();
+
+    // 计算鼠标相对画布内部的像素 X 坐标
+    const mouseX = e.clientX - rect.left;
+
+    // 【核心】将像素坐标转换为真实的数据值 (样本点位置)
+    const xCursor = u.posToVal(mouseX, 'x');
+
+    // 确定缩放系数 (deltaY < 0 表示向上滚放大视口，> 0 表示向下滚缩小视口)
+    const zoomFactor = e.deltaY < 0 ? 0.85 : 1.15;
+
+    // 以鼠标所在点为锚点，计算新的左右边界
+    const leftDist = xCursor - xMin;
+    const rightDist = xMax - xCursor;
+
+    let newMin = xCursor - leftDist * zoomFactor;
+    let newMax = xCursor + rightDist * zoomFactor;
+
+    // 边界约束1：不能拉出数据真实的物理边界 (0 到 2048)
+    // 注意：假设您的数据深度为 2048 点
+    if (newMin < 0) newMin = 0;
+    if (newMax > 2048) newMax = 2048;
+
+    // 边界约束2：防过度放大导致程序崩溃 (最少必须显示 10 个样本点)
+    if (newMax - newMin < 10) return;
+
+    // 将计算出的新范围应用到 X 轴
+    u.setScale('x', { min: newMin, max: newMax });
+}, { passive: false });
+
+// 3. 附加优化体验：双击画布任意位置，快速恢复全局视野
+over.addEventListener("dblclick", () => {
+    uplotInst.setScale('x', { min: 0, max: 2048 });
+});
+                // 监听窗口大小改变，自适应波形宽高
+                window.addEventListener("resize", () => {
+                    uplotInst.setSize({
+                        width: document.getElementById('uplot-div').clientWidth,
+                        height: document.getElementById('uplot-div').clientHeight
+                    });
+                });
+            };
+
+            onMounted(() => {
+                initPlot();
+                fetchPorts(); // 页面加载完自动获取一次串口
+            });
+
+            return { portsList, selectedPort, isRunning, fetchPorts, startCapture, stopCapture };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+
+</body>
+</html>

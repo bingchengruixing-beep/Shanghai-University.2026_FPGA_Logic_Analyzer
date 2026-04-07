@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>简易逻辑分析仪 - 真实硬件解码版</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/theme-chalk/dark/css-vars.css">
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/uplot/dist/uPlot.min.css">
+    <script src="https://unpkg.com/uplot/dist/uPlot.iife.min.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; background-color: #141414; color: #E5EAF3; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
+        #app { display: flex; height: 100vh; }
+
+        /* 左侧侧边栏 */
+        .sidebar { background-color: #1D1E22; border-right: 1px solid #333; transition: width 0.3s ease; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar.expanded { width: 340px; }
+        .sidebar.collapsed { width: 40px; }
+
+        /* 右侧解码器配置栏 (增量植入) */
+        .right-sidebar { background-color: #1D1E22; border-left: 1px solid #333; transition: width 0.3s ease; display: flex; flex-direction: column; overflow: hidden; }
+        .right-sidebar.expanded { width: 320px; }
+        .right-sidebar.collapsed { width: 0px; border-left: none; }
+        .decoder-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding: 6px; background: #25272C; border-radius: 4px; }
+
+        .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #25272C; border-bottom: 1px solid #333; }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 15px; width: 340px; box-sizing: border-box; }
+        .sidebar-content::-webkit-scrollbar { display: none; }
+
+        /* 主工作区 (保留了严格防死锁机制) */
+        .main-view { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; min-width: 0; min-height: 0; }
+        .top-toolbar { height: 50px; background-color: #1D1E22; border-bottom: 1px solid #333; display: flex; align-items: center; padding: 0 20px; gap: 15px; }
+        .plot-container { flex: 1; width: 100%; height: 100%; position: relative; overflow: hidden; }
+
+        /* UI 覆盖 */
+        .u-select { background: rgba(64, 158, 255, 0.15) !important; border: 1px dashed #409EFF !important; box-sizing: border-box; }
+        .el-collapse-item__header { background-color: transparent !important; color: #409EFF !important; font-weight: bold; font-size: 15px; }
+        .el-collapse-item__wrap { background-color: transparent !important; }
+        .el-form-item__label { color: #A3A6AD !important; padding-bottom: 2px !important; }
+        .el-form-item { margin-bottom: 12px; }
+        .el-checkbox { margin-right: 15px !important; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div :class="['sidebar', isSidebarOpen ? 'expanded' : 'collapsed']">
+        <div class="sidebar-header">
+            <span v-show="isSidebarOpen" style="color:#409EFF; font-weight:bold; font-size: 16px;">配置控制台</span>
+            <el-button size="small" circle @click="isSidebarOpen = !isSidebarOpen">{{ isSidebarOpen ? '◀' : '▶' }}</el-button>
+        </div>
+        <div class="sidebar-content" v-show="isSidebarOpen">
+            <el-collapse v-model="activePanels">
+                <el-collapse-item title="⚙️ 串口设置" name="1">
+                    <el-form label-position="top" size="small">
+                        <el-form-item label="目标串口">
+                            <div style="display: flex; gap: 10px; width: 100%;">
+                                <el-select v-model="selectedPort" placeholder="手动输入或选择" filterable allow-create style="flex: 1;" :disabled="isRunning">
+                                    <el-option v-for="port in portsList" :key="port" :label="port" :value="port"></el-option>
+                                </el-select>
+                                <el-button type="info" plain @click="fetchPorts" :disabled="isRunning">刷新</el-button>
+                            </div>
+                        </el-form-item>
+                        <el-form-item label="波特率">
+                            <el-select v-model="baudRate" style="width: 100%;" :disabled="isRunning">
+                                <el-option label="115200 bps" value="115200"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item>
+                            <el-button type="primary" style="width: 48%;" @click="startCapture" :disabled="isRunning || !selectedPort">连接</el-button>
+                            <el-button type="danger" style="width: 48%;" @click="stopCapture" :disabled="!isRunning">断开</el-button>
+                        </el-form-item>
+                    </el-form>
+                </el-collapse-item>
+
+                <el-collapse-item title="⚡ 触发设置" name="2">
+                    <el-form label-position="top" size="small">
+                        <el-form-item label="触发通道">
+                            <el-select v-model="triggerCh" style="width: 100%;">
+                                <el-option v-for="i in 8" :key="i-1" :label="'通道 ' + (i-1)" :value="i-1"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="触发沿">
+                            <el-select v-model="triggerEdge" style="width: 100%;">
+                                <el-option label="上升沿" value="rising"></el-option>
+                                <el-option label="下降沿" value="falling"></el-option>
+                            </el-select>
+                        </el-form-item>
+                    </el-form>
+                </el-collapse-item>
+
+                <el-collapse-item title="📊 采集设置" name="3">
+                    <el-form label-position="top" size="small">
+                        <el-form-item label="单次采集点数">
+                            <el-select v-model="capturePoints" style="width: 100%;">
+                                <el-option label="1024 样本" :value="1024"></el-option>
+                                <el-option label="2048 样本" :value="2048"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="通道显示">
+                            <div style="margin-bottom: 5px;">
+                                <el-button size="small" type="primary" link @click="selectAllChannels(true)">全选</el-button>
+                                <el-button size="small" type="primary" link @click="selectAllChannels(false)">全不选</el-button>
+                            </div>
+                            <el-checkbox-group v-model="visibleChannels" @change="updateChannelVisibility">
+                                <el-checkbox v-for="i in 8" :key="i-1" :label="i-1">CH{{ i-1 }}</el-checkbox>
+                            </el-checkbox-group>
+                        </el-form-item>
+                    </el-form>
+                </el-collapse-item>
+            </el-collapse>
+        </div>
+    </div>
+
+    <div class="main-view">
+        <div class="top-toolbar">
+            <el-button type="warning" plain size="small" @click="resetView">🏠 重置视图</el-button>
+            <el-divider direction="vertical"></el-divider>
+            <span style="font-size: 13px; color: #909399;">🖱️ 左键框选 | 右键平移 | 滚轮缩放 | 双击复原</span>
+            <div style="flex: 1;"></div>
+            <span style="font-size: 13px; color: #67C23A; margin-right: 15px;" id="measure-result">等待测量...</span>
+
+            <el-button type="primary" size="small" @click="isRightSidebarOpen = !isRightSidebarOpen">
+                {{ isRightSidebarOpen ? '收起解码器 ▶' : '◀ 协议解码器' }}
+            </el-button>
+        </div>
+        <div id="uplot-div" class="plot-container"></div>
+    </div>
+
+    <div :class="['right-sidebar', isRightSidebarOpen ? 'expanded' : 'collapsed']">
+        <div class="sidebar-header">
+            <span v-show="isRightSidebarOpen" style="color:#E6A23C; font-weight:bold; font-size: 16px;">并行总线解码 (Hex)</span>
+        </div>
+        <div class="sidebar-content" v-show="isRightSidebarOpen" style="width: 320px;">
+            <el-switch v-model="decoderEnabled" active-text="启用解码总线" inactive-text="关闭" @change="recalculateDecoder" style="margin-bottom: 20px;"></el-switch>
+
+            <div style="color: #A3A6AD; font-size: 12px; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #333;">
+                <span style="display:inline-block; width: 60px;">使能通道</span>
+                <span style="display:inline-block; width: 80px; text-align: center;">通道号</span>
+                <span style="display:inline-block; width: 100px; text-align: right;">分配数据位</span>
+            </div>
+
+            <div v-for="cfg in decoderConfig" :key="cfg.ch" class="decoder-row">
+                <el-checkbox v-model="cfg.enabled" @change="recalculateDecoder"></el-checkbox>
+                <span style="color: #E5EAF3; font-weight: bold; width: 60px;">CH {{ cfg.ch }}</span>
+                <el-input-number v-model="cfg.bit" :min="0" :max="15" size="small" style="width: 100px;" @change="recalculateDecoder"></el-input-number>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, onMounted, reactive } = Vue;
+
+    createApp({
+        setup() {
+            // UI 状态
+            const isSidebarOpen = ref(true);
+            const isRightSidebarOpen = ref(false); // 默认收起解码器
+            const activePanels = ref(['1', '3']);
+
+            // 硬件状态
+            const portsList = ref([]);
+            const selectedPort = ref('');
+            const baudRate = ref('115200');
+            const isRunning = ref(false);
+
+            const triggerCh = ref(0);
+            const triggerEdge = ref('rising');
+            const capturePoints = ref(2048);
+            const visibleChannels = ref([0, 1, 2, 3, 4, 5, 6, 7]);
+
+            // 解码器状态 (增量植入)
+            const decoderEnabled = ref(true);
+            const decoderConfig = reactive(Array.from({length: 8}, (_, i) => ({ ch: i, enabled: i < 4, bit: i })));
+
+            let ws = null;
+            let uplotInst = null;
+            let currentBitMatrix = null; // 用于缓存真实物理数据的变量
+            let busSegments = [];
+
+            const API_BASE = 'http://127.0.0.1:8000';
+            const WS_BASE = 'ws://127.0.0.1:8000';
+
+            const selectAllChannels = (isAll) => { visibleChannels.value = isAll ? [0,1,2,3,4,5,6,7] : []; updateChannelVisibility(); };
+            const updateChannelVisibility = () => {
+                if(!uplotInst) return;
+                for(let i = 0; i < 8; i++) { uplotInst.setSeries(i + 1, { show: visibleChannels.value.includes(i) }); }
+            };
+            const resetView = () => { if(uplotInst) { uplotInst.setScale('x', { min: 0, max: capturePoints.value }); } };
+
+            // 增量植入：并行计算状态机
+            const recalculateDecoder = () => {
+                busSegments = [];
+                if (!decoderEnabled.value || !currentBitMatrix) {
+                    if(uplotInst) uplotInst.redraw();
+                    return;
+                }
+                const depth = currentBitMatrix[0].length;
+                let currentHex = -1, segmentStart = 0;
+                const activeConfigs = decoderConfig.filter(c => c.enabled);
+
+                for (let i = 0; i < depth; i++) {
+                    let val = 0;
+                    for (let c of activeConfigs) {
+                        if (currentBitMatrix[c.ch][i] === 1) val |= (1 << c.bit);
+                    }
+                    if (val !== currentHex) {
+                        if (i > 0) busSegments.push({ startIdx: segmentStart, endIdx: i, val: currentHex });
+                        currentHex = val;
+                        segmentStart = i;
+                    }
+                }
+                busSegments.push({ startIdx: segmentStart, endIdx: depth, val: currentHex });
+                if(uplotInst) uplotInst.redraw();
+            };
+
+            // 真实的 HTTP 硬件连接流 (完全保留)
+            const fetchPorts = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/ports`);
+                    const data = await res.json();
+                    if(data.status === "success") {
+                        portsList.value = data.data;
+                        if(portsList.value.length > 0 && !selectedPort.value) selectedPort.value = portsList.value[0];
+                    }
+                } catch (e) { ElementPlus.ElMessage.error('无法连接后端 API'); }
+            };
+
+            const startCapture = async () => {
+                if(!selectedPort.value) return;
+                try {
+                    const res = await fetch(`${API_BASE}/api/connect?port=${selectedPort.value}&baudrate=${baudRate.value}`, {method: 'POST'});
+                    const data = await res.json();
+                    if(data.status === "success") {
+                        isRunning.value = true;
+                        initWebSocket();
+                    } else { ElementPlus.ElMessage.error(data.msg); }
+                } catch (e) { ElementPlus.ElMessage.error('启动失败'); }
+            };
+
+            const stopCapture = async () => {
+                try {
+                    await fetch(`${API_BASE}/api/disconnect`, {method: 'POST'});
+                    isRunning.value = false;
+                    if(ws) ws.close();
+                } catch (e) {}
+            };
+
+            // 真实的 WebSocket 接收流 (截断并缓存数据用于解码)
+            const initWebSocket = () => {
+                ws = new WebSocket(`${WS_BASE}/ws/data`);
+                ws.onmessage = (event) => {
+                    const packet = JSON.parse(event.data);
+                    if(packet.type === "waveform" && uplotInst) {
+                        const bitMatrix = packet.data;
+                        const depth = bitMatrix[0].length;
+
+                        // 【在此处截获物理数据进行解码计算】
+                        currentBitMatrix = bitMatrix;
+                        recalculateDecoder();
+
+                        let x_data = Array.from({length: depth}, (_, i) => i);
+                        let plot_data = [x_data];
+                        for(let ch=0; ch<8; ch++) {
+                            plot_data.push(bitMatrix[ch].map(val => val + (ch * 2)));
+                        }
+                        uplotInst.setData(plot_data);
+                    }
+                };
+            };
+
+            // 初始化底层画板 (继承了 ResizeObserver 防死锁)
+            const initPlot = () => {
+                const colors = ['#F56C6C', '#E6A23C', '#5CB87A', '#1989FA', '#67C23A', '#909399', '#D4A4EB', '#00CED1'];
+                let seriesConfig = [ {} ];
+                let yTicks = [];
+                for(let i=0; i<8; i++) {
+                    yTicks.push([i * 2 + 0.5, `CH${i}`]);
+                    seriesConfig.push({ stroke: colors[i], width: 2, paths: uPlot.paths.stepped({align: 1}) });
+                }
+
+                // 增量植入：解码器轨道
+                yTicks.push([17.5, `DEC`]);
+
+                const opts = {
+                    width: document.getElementById('uplot-div').clientWidth,
+                    height: document.getElementById('uplot-div').clientHeight,
+                    padding: [20, 20, 10, 20],
+                    scales: {
+    x: {
+        time: false,
+        // 动态返回当前的 min 和 max，既去除了引擎自带的两侧 padding，又完美保留了所有的鼠标缩放功能
+        range: (u, min, max) => [min, max]
+    },
+    y: {
+        // Y 轴由于不需要纵向滚动或放大，依然保持静态锁死，防止通道互相挤压
+        range: [-1, 19]
+    }
+},
+                    series: seriesConfig,
+                    axes: [
+                        { stroke: "#c0c0c0", grid: { stroke: "#333", width: 1 } },
+                        {
+                            stroke: "#E6A23C",
+                            grid: { stroke: "#333", width: 1 },
+                            splits: yTicks.map(t => t[0]),
+                            values: (u, vals) => vals.map(v => {
+                                let match = yTicks.find(t => t[0] === v);
+                                return match ? match[1] : '';
+                            })
+                        }
+                    ],
+                    cursor: { sync: { key: "moo" } },
+                    select: { show: true },
+                    hooks: {
+                        // 游标测频逻辑 (完全保留)
+                        setSelect: [
+                            (u) => {
+                                const min = u.posToVal(u.select.left, 'x');
+                                const max = u.posToVal(u.select.left + u.select.width, 'x');
+                                const deltaSamples = Math.abs(max - min);
+                                if(deltaSamples > 0) {
+                                    const Ts_us = 1.0;
+                                    const deltaT_us = deltaSamples * Ts_us;
+                                    const freq_kHz = 1000 / deltaT_us;
+                                    document.getElementById('measure-result').innerHTML =
+                                        `📏 ΔX: ${deltaSamples.toFixed(1)} 样本 | ΔT: ${deltaT_us.toFixed(2)} μs | Freq: ${freq_kHz.toFixed(2)} kHz`;
+                                }
+                            }
+                        ],
+                        // Canvas 原生解码渲染逻辑 (增量植入)
+                        draw: [
+    (u) => {
+        if (!decoderEnabled.value || busSegments.length === 0) return;
+        const ctx = u.ctx;
+
+        // 【核心修正1】：获取当前设备的真实物理像素比
+        const PR = window.devicePixelRatio || 1;
+
+        // 【核心修正2】：所有的坐标、高度、倒角尺寸都必须乘以 PR
+        const yCenter = Math.round(u.valToPos(17.5, 'y') * PR) + u.bbox.top;
+        const height = 28 * PR;
+        const yTop = yCenter - height / 2;
+
+        ctx.save();
+
+        // 开启物理边界剪裁
+        ctx.beginPath();
+        ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
+        ctx.clip();
+
+        // 字体同样需要乘以缩放比
+        ctx.font = `bold ${16 * PR}px Consolas, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        busSegments.forEach(seg => {
+            // 【核心修正3】：先将 CSS 坐标乘以 PR 转换为物理坐标，再叠加物理偏移量
+            const x0 = Math.round(u.valToPos(seg.startIdx, 'x') * PR) + u.bbox.left;
+            const x1 = Math.round(u.valToPos(seg.endIdx, 'x') * PR) + u.bbox.left;
+            const width = x1 - x0;
+
+            if (width < 2 * PR) return; // 极窄气泡跳过渲染
+
+            ctx.fillStyle = "rgba(230, 162, 60, 0.2)";
+            ctx.strokeStyle = "#E6A23C";
+            ctx.lineWidth = 1 * PR; // 线宽同步物理放大
+
+            ctx.beginPath();
+            const chamfer = Math.min(5 * PR, width / 2);
+            ctx.moveTo(x0, yCenter);
+            ctx.lineTo(x0 + chamfer, yTop);
+            ctx.lineTo(x1 - chamfer, yTop);
+            ctx.lineTo(x1, yCenter);
+            ctx.lineTo(x1 - chamfer, yTop + height);
+            ctx.lineTo(x0 + chamfer, yTop + height);
+            ctx.closePath();
+
+            ctx.fill();
+            ctx.stroke();
+
+            const hexText = "0x" + seg.val.toString(16).toUpperCase().padStart(2, '0');
+            // 文字防重叠计算同步引入 PR
+            if (width > ctx.measureText(hexText).width + 8 * PR) {
+                ctx.fillStyle = "#E5EAF3";
+                ctx.fillText(hexText, x0 + width / 2, yCenter);
+            }
+        });
+        ctx.restore();
+    }
+]
+                    }
+                };
+
+                let initData = [Array.from({length: capturePoints.value}, (_, i) => i)];
+                for(let i=0; i<8; i++) initData.push(Array(capturePoints.value).fill(null));
+
+                uplotInst = new uPlot(opts, initData, document.getElementById('uplot-div'));
+
+                // 防死锁的拉伸监听 (完全保留)
+                const mainViewDiv = document.querySelector('.main-view');
+                const plotContainerDiv = document.getElementById('uplot-div');
+                const resizeObserver = new ResizeObserver(() => {
+                    window.requestAnimationFrame(() => {
+                        if (uplotInst && plotContainerDiv.clientWidth > 0) {
+                            uplotInst.setSize({ width: plotContainerDiv.clientWidth, height: plotContainerDiv.clientHeight });
+                        }
+                    });
+                });
+                resizeObserver.observe(mainViewDiv);
+
+                // 滚轮缩放监听 (完全保留)
+                const over = uplotInst.over;
+                over.addEventListener("wheel", (e) => {
+                    e.preventDefault();
+                    let xMin = uplotInst.scales.x.min, xMax = uplotInst.scales.x.max;
+                    const xCursor = uplotInst.posToVal(e.clientX - over.getBoundingClientRect().left, 'x');
+                    const zoomFactor = e.deltaY < 0 ? 0.85 : 1.15;
+                    let newMin = Math.max(0, xCursor - (xCursor - xMin) * zoomFactor);
+                    let newMax = Math.min(capturePoints.value, xCursor + (xMax - xCursor) * zoomFactor);
+                    if (newMax - newMin > 10) uplotInst.setScale('x', { min: newMin, max: newMax });
+                }, { passive: false });
+            };
+
+            onMounted(() => { initPlot(); fetchPorts(); });
+
+            return {
+                isSidebarOpen, isRightSidebarOpen, selectedPort, baudRate, isRunning,
+                triggerCh, triggerEdge, capturePoints, visibleChannels,
+                decoderEnabled, decoderConfig, recalculateDecoder,
+                fetchPorts, startCapture, stopCapture, selectAllChannels, updateChannelVisibility, resetView
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>
