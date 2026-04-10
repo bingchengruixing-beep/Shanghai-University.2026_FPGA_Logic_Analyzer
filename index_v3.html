@@ -442,12 +442,11 @@
 
                         uplotInst.setData(plot_data);
 
-                        if (captureMode.value === 'continuous' && isRunning.value) {
-                            setTimeout(() => {
-                                if (captureMode.value === 'continuous') {
-                                    sendControlFrame(1, true);
-                                }
-                            }, 50);
+                        // 【核心改造 4：前端状态机转变为纯监听者与单次截断器】
+                        // 如果是单次采样模式，在收到并画完这唯一的一帧后，立刻静默发送 CMD=02 关闭后端的软件阀门
+                        // 如果是连续采样模式，什么都不做，安静地接收后端瀑布般推过来的 WebSocket 数据并疯狂渲染即可
+                        if (captureMode.value === 'single' && isRunning.value) {
+                            sendControlFrame(2, true); // true 代表静默发送，不弹窗打扰用户
                         }
                     }
                 };
