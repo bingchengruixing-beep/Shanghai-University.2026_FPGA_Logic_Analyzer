@@ -2,7 +2,7 @@
 <html lang="zh-CN" class="dark">
 <head>
     <meta charset="UTF-8">
-    <title>简易逻辑分析仪 - AI 诊断增强版</title>
+    <title>简易逻辑分析仪 - 旗舰解码版</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
     <link rel="stylesheet" href="https://unpkg.com/element-plus/theme-chalk/dark/css-vars.css">
@@ -20,12 +20,12 @@
         .sidebar.collapsed { width: 40px; }
 
         .right-sidebar { background-color: #1D1E22; border-left: 1px solid #333; transition: width 0.3s ease; display: flex; flex-direction: column; overflow: hidden; }
-        .right-sidebar.expanded { width: 320px; }
+        .right-sidebar.expanded { width: 340px; }
         .right-sidebar.collapsed { width: 0px; border-left: none; }
         .decoder-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding: 6px; background: #25272C; border-radius: 4px; }
 
         .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #25272C; border-bottom: 1px solid #333; }
-        .sidebar-content { flex: 1; overflow-y: auto; padding: 15px; width: 340px; box-sizing: border-box; }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 15px; width: 100%; box-sizing: border-box; }
         .sidebar-content::-webkit-scrollbar { display: none; }
 
         .main-view { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; min-width: 0; min-height: 0; }
@@ -33,11 +33,14 @@
         .plot-container { flex: 1; width: 100%; height: 100%; position: relative; overflow: hidden; }
 
         .u-select { background: rgba(64, 158, 255, 0.15) !important; border: 1px dashed #409EFF !important; box-sizing: border-box; }
-        .el-collapse-item__header { background-color: transparent !important; color: #409EFF !important; font-weight: bold; font-size: 15px; }
+        .el-collapse-item__header { background-color: transparent !important; color: #409EFF !important; font-weight: bold; font-size: 14px; }
         .el-collapse-item__wrap { background-color: transparent !important; }
-        .el-form-item__label { color: #A3A6AD !important; padding-bottom: 2px !important; }
+        .el-form-item__label { color: #A3A6AD !important; padding-bottom: 2px !important; line-height: 1.2 !important; }
         .el-form-item { margin-bottom: 12px; }
         .el-checkbox { margin-right: 15px !important; }
+
+        /* 针对解码面板特别压缩样式以防拥挤 */
+        .decode-panel .el-form-item { margin-bottom: 8px; }
 
         .ai-report { line-height: 1.6; color: #E5EAF3; font-size: 14px; }
         .ai-report h1, .ai-report h2, .ai-report h3 { color: #409EFF; margin-top: 1em; margin-bottom: 0.5em; }
@@ -60,7 +63,7 @@
             <span v-show="isSidebarOpen" style="color:#409EFF; font-weight:bold; font-size: 16px;">配置控制台</span>
             <el-button size="small" circle @click="isSidebarOpen = !isSidebarOpen">{{ isSidebarOpen ? '◀' : '▶' }}</el-button>
         </div>
-        <div class="sidebar-content" v-show="isSidebarOpen">
+        <div class="sidebar-content" v-show="isSidebarOpen" style="width: 340px;">
             <el-collapse v-model="activePanels">
                 <el-collapse-item title="⚙️ 串口设置" name="1">
                     <el-form label-position="top" size="small">
@@ -108,11 +111,9 @@
                                 <el-option label="05: 模式触发 (Pattern)" :value="5"></el-option>
                             </el-select>
                         </el-form-item>
-
                         <el-form-item :label="triggerMode === 5 ? 'Pattern Value (P1)' : '触发通道 (P1)'">
                             <el-input-number v-model="p1Param" :min="0" :max="255" style="width: 100%;"></el-input-number>
                         </el-form-item>
-
                         <el-form-item v-if="triggerMode === 5" label="Pattern Mask (P2)">
                             <el-input-number v-model="p2Param" :min="0" :max="255" style="width: 100%;"></el-input-number>
                         </el-form-item>
@@ -131,7 +132,6 @@
                                 <el-option label="05: 10kHz" :value="5"></el-option>
                             </el-select>
                         </el-form-item>
-
                         <el-form-item label="单次采集点数">
                             <el-select v-model="capturePoints" style="width: 100%;">
                                 <el-option label="1024 样本" :value="1024"></el-option>
@@ -174,22 +174,78 @@
 
     <div :class="['right-sidebar', isRightSidebarOpen ? 'expanded' : 'collapsed']">
         <div class="sidebar-header">
-            <span v-show="isRightSidebarOpen" style="color:#E6A23C; font-weight:bold; font-size: 16px;">并行总线解码 (Hex)</span>
+            <span v-show="isRightSidebarOpen" style="color:#E6A23C; font-weight:bold; font-size: 16px;">总线协议解析引擎</span>
         </div>
-        <div class="sidebar-content" v-show="isRightSidebarOpen" style="width: 320px;">
-            <el-switch v-model="decoderEnabled" active-text="启用解码总线" inactive-text="关闭" @change="recalculateDecoder" style="margin-bottom: 20px;"></el-switch>
+        <div class="sidebar-content decode-panel" v-show="isRightSidebarOpen" style="width: 340px;">
+            <el-collapse v-model="activeDecodePanels">
 
-            <div style="color: #A3A6AD; font-size: 12px; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #333;">
-                <span style="display:inline-block; width: 60px;">使能通道</span>
-                <span style="display:inline-block; width: 80px; text-align: center;">通道号</span>
-                <span style="display:inline-block; width: 100px; text-align: right;">分配数据位</span>
-            </div>
+                <el-collapse-item title="🔀 并行总线 (Parallel)" name="dec">
+                    <el-switch v-model="decoderEnabled" active-text="启用" inactive-text="关闭" @change="recalculateDecoder" style="margin-bottom: 15px;"></el-switch>
+                    <div style="color: #A3A6AD; font-size: 12px; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid #333; display: flex; justify-content: space-between;">
+                        <span>使能</span> <span>通道</span> <span>分配数据位</span>
+                    </div>
+                    <div v-for="cfg in decoderConfig" :key="cfg.ch" class="decoder-row" style="margin-bottom: 4px;">
+                        <el-checkbox v-model="cfg.enabled" @change="recalculateDecoder"></el-checkbox>
+                        <span style="color: #E5EAF3; font-weight: bold;">CH{{ cfg.ch }}</span>
+                        <el-input-number v-model="cfg.bit" :min="0" :max="15" size="small" style="width: 90px;" @change="recalculateDecoder"></el-input-number>
+                    </div>
+                </el-collapse-item>
 
-            <div v-for="cfg in decoderConfig" :key="cfg.ch" class="decoder-row">
-                <el-checkbox v-model="cfg.enabled" @change="recalculateDecoder"></el-checkbox>
-                <span style="color: #E5EAF3; font-weight: bold; width: 60px;">CH {{ cfg.ch }}</span>
-                <el-input-number v-model="cfg.bit" :min="0" :max="15" size="small" style="width: 100px;" @change="recalculateDecoder"></el-input-number>
-            </div>
+                <el-collapse-item title="📟 UART 串行解码" name="uart">
+                    <el-switch v-model="uartConfig.enabled" active-text="启用" inactive-text="关闭" @change="recalculateDecoder" style="margin-bottom: 15px;"></el-switch>
+                    <el-form label-position="left" label-width="100px" size="small">
+                        <el-form-item label="RX 通道">
+                            <el-select v-model="uartConfig.ch" @change="recalculateDecoder" style="width: 100%;">
+                                <el-option v-for="i in 8" :key="i-1" :label="`CH${i-1}`" :value="i-1"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="波特率">
+                            <el-select v-model="uartConfig.baud" @change="recalculateDecoder" style="width: 100%;" allow-create filterable>
+                                <el-option label="9600" :value="9600"></el-option>
+                                <el-option label="19200" :value="19200"></el-option>
+                                <el-option label="38400" :value="38400"></el-option>
+                                <el-option label="115200" :value="115200"></el-option>
+                            </el-select>
+                        </el-form-item>
+                    </el-form>
+                    <div style="font-size: 12px; color: #909399; line-height: 1.4;">注: UART 默认配置为 8 数据位, 1 停止位, 无校验, LSB优先。需确保仪器的采样率至少是波特率的 5 倍。</div>
+                </el-collapse-item>
+
+                <el-collapse-item title="🔌 SPI 总线解码" name="spi">
+                    <el-switch v-model="spiConfig.enabled" active-text="启用" inactive-text="关闭" @change="recalculateDecoder" style="margin-bottom: 15px;"></el-switch>
+                    <el-form label-position="left" label-width="100px" size="small">
+                        <el-form-item label="CS (片选)">
+                            <el-select v-model="spiConfig.cs" @change="recalculateDecoder" style="width: 100%;">
+                                <el-option v-for="i in 8" :key="i-1" :label="`CH${i-1}`" :value="i-1"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="SCK (时钟)">
+                            <el-select v-model="spiConfig.sck" @change="recalculateDecoder" style="width: 100%;">
+                                <el-option v-for="i in 8" :key="i-1" :label="`CH${i-1}`" :value="i-1"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="MOSI (数据)">
+                            <el-select v-model="spiConfig.mosi" @change="recalculateDecoder" style="width: 100%;">
+                                <el-option v-for="i in 8" :key="i-1" :label="`CH${i-1}`" :value="i-1"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="CPOL (极性)">
+                            <el-radio-group v-model="spiConfig.cpol" @change="recalculateDecoder">
+                                <el-radio :label="0">0 (低空闲)</el-radio>
+                                <el-radio :label="1">1 (高空闲)</el-radio>
+                            </el-radio-group>
+                        </el-form-item>
+                        <el-form-item label="CPHA (相位)">
+                            <el-radio-group v-model="spiConfig.cpha" @change="recalculateDecoder">
+                                <el-radio :label="0">0 (首沿采样)</el-radio>
+                                <el-radio :label="1">1 (尾沿采样)</el-radio>
+                            </el-radio-group>
+                        </el-form-item>
+                    </el-form>
+                    <div style="font-size: 12px; color: #909399;">注: SPI 默认解析为 MSB优先 (高位先行)。</div>
+                </el-collapse-item>
+
+            </el-collapse>
         </div>
     </div>
 
@@ -212,18 +268,21 @@
 
     createApp({
         setup() {
+            // 控制面板状态
             const isSidebarOpen = ref(true);
             const isRightSidebarOpen = ref(false);
             const activePanels = ref(['1', '2', '3']);
+            const activeDecodePanels = ref(['dec', 'uart', 'spi']);
 
+            // 硬件通信状态
             const portsList = ref([]);
             const selectedPort = ref('');
             const baudRate = ref('115200');
             const isRunning = ref(false);
-
             const captureMode = ref('single');
             const isAutoRequesting = ref(false);
 
+            // FPGA 控制参数
             const divRate = ref(3);
             const triggerMode = ref(1);
             const p1Param = ref(0);
@@ -231,6 +290,7 @@
             const capturePoints = ref(2048);
             const visibleChannels = ref([0, 1, 2, 3, 4, 5, 6, 7]);
 
+            // 硬件采样率映射表
             const divMap = {
                 0: { label: '50MHz', ts: 0.02 },
                 1: { label: '10MHz', ts: 0.1 },
@@ -240,32 +300,43 @@
                 5: { label: '10kHz', ts: 100.0 }
             };
 
+            // ---- 解码器配置区 ----
+            // 1. 并行解码配置
             const decoderEnabled = ref(true);
             const decoderConfig = reactive(Array.from({length: 8}, (_, i) => ({ ch: i, enabled: i < 4, bit: i })));
+            let busSegments = []; // 并行数据段
 
+            // 2. UART 解码配置
+            const uartConfig = reactive({ enabled: false, ch: 0, baud: 115200 });
+            let uartSegments = []; // UART 数据段
+
+            // 3. SPI 解码配置
+            const spiConfig = reactive({ enabled: false, cs: 1, sck: 2, mosi: 3, cpol: 0, cpha: 0 });
+            let spiSegments = []; // SPI 数据段
+
+            // AI 状态
             const aiDialogOpen = ref(false);
             const aiLoading = ref(false);
             const aiResult = ref('');
             const renderedAiResult = computed(() => marked.parse(aiResult.value));
 
+            // 全局图表实例
             let ws = null;
             let uplotInst = null;
             let currentBitMatrix = null;
-            let busSegments = [];
 
             const API_BASE = 'http://127.0.0.1:8000';
             const WS_BASE = 'ws://127.0.0.1:8000';
             const apiKey = "AIzaSyBKF8E8xji598BSn_Q91yLooVF6JFCbVmc";
 
+            // AI 请求封装
             const callGeminiAPI = async (prompt) => {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
                 const payload = {
                     contents: [{ parts: [{ text: prompt }] }],
-                    systemInstruction: {
-                        parts: [{ text: "你是一个专业的数字逻辑、FPGA开发与电子工程专家。请用中文简明扼要地分析用户提供的逻辑分析仪并行总线捕获数据。重点寻找异常的毛刺（竞争冒险）、判断数据是否具有特定规律（如递增/ASCII等），并给出工程建议。" }]
-                    }
+                    systemInstruction: { parts: [{ text: "你是一个专业的数字逻辑与电子工程专家。请用中文分析逻辑分析仪数据。寻找异常毛刺，判断数据规律并给建议。" }] }
                 };
-                const retries = [1000, 2000, 4000, 8000, 16000];
+                const retries = [1000, 2000, 4000];
                 for (let attempt = 0; attempt <= retries.length; attempt++) {
                     try {
                         const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -281,7 +352,7 @@
 
             const runAIDiagnosis = async () => {
                 if (!decoderEnabled.value || busSegments.length === 0) {
-                    ElementPlus.ElMessage.warning('没有提取到有效的数据段！请先采集数据并开启右上角的【协议解码器】。');
+                    ElementPlus.ElMessage.warning('没有提取到有效的并行总线数据段用于分析！');
                     return;
                 }
                 aiDialogOpen.value = true;
@@ -290,16 +361,11 @@
 
                 const ts = divMap[divRate.value].ts;
                 const sampleRate = divMap[divRate.value].label;
-                const segmentsToAnalyze = busSegments.slice(0, 150).map(seg => {
-                    const durationUs = (seg.endIdx - seg.startIdx) * ts;
-                    let timeStr = durationUs > 1000 ? `${(durationUs/1000).toFixed(3)}ms` : `${durationUs.toFixed(2)}μs`;
-                    return `- 状态 0x${seg.val.toString(16).toUpperCase().padStart(2, '0')}，保持了 ${timeStr}`;
+                const segmentsToAnalyze = busSegments.slice(0, 100).map(seg => {
+                    return `- 状态 0x${seg.val.toString(16).toUpperCase().padStart(2, '0')}，保持 ${(seg.endIdx - seg.startIdx) * ts} μs`;
                 });
 
-                let prompt = `我在 FPGA 上挂载了简易逻辑分析仪，捕获了一段并行总线数据。当前的采样率配置为 ${sampleRate}（即每个采样点代表 ${ts} μs）。\n\n`;
-                prompt += `以下是总线解析出的前 ${segmentsToAnalyze.length} 个连续数据段及其维持时间：\n${segmentsToAnalyze.join('\n')}\n\n`;
-                prompt += `请作为电子工程专家，为我执行以下分析：\n1. **数据规律识别**：这组十六进制数据符合什么特征？\n2. **时序异常诊断（关键）**：是否存在持续时间极其短暂的异常状态（可能是竞争冒险/毛刺）？\n3. **排障建议**：对于这段波形的进一步调试方向有什么建议？\n`;
-
+                let prompt = `逻辑分析仪并行总线数据 (采样率: ${sampleRate})。\n前部连续数据段：\n${segmentsToAnalyze.join('\n')}\n请分析数据特征、时序异常与排障建议。`;
                 aiResult.value = await callGeminiAPI(prompt);
                 aiLoading.value = false;
             };
@@ -309,33 +375,127 @@
                 if(!uplotInst) return;
                 for(let i = 0; i < 8; i++) { uplotInst.setSeries(i + 1, { show: visibleChannels.value.includes(i) }); }
             };
-            const resetView = () => { if(uplotInst) { uplotInst.setScale('x', { min: 0, max: capturePoints.value }); } };
+            const resetView = () => { if(uplotInst) uplotInst.setScale('x', { min: 0, max: capturePoints.value }); };
 
+            // ================== 解码核心算法池 ==================
             const recalculateDecoder = () => {
                 busSegments = [];
-                if (!decoderEnabled.value || !currentBitMatrix) {
+                uartSegments = [];
+                spiSegments = [];
+
+                if (!currentBitMatrix) {
                     if(uplotInst) uplotInst.redraw();
                     return;
                 }
                 const depth = currentBitMatrix[0].length;
-                let currentHex = -1, segmentStart = 0;
-                const activeConfigs = decoderConfig.filter(c => c.enabled);
 
-                for (let i = 0; i < depth; i++) {
-                    let val = 0;
-                    for (let c of activeConfigs) {
-                        if (currentBitMatrix[c.ch][i] === 1) val |= (1 << c.bit);
+                // 1. 并行解码算法
+                if (decoderEnabled.value) {
+                    let currentHex = -1, segmentStart = 0;
+                    const activeConfigs = decoderConfig.filter(c => c.enabled);
+                    for (let i = 0; i < depth; i++) {
+                        let val = 0;
+                        for (let c of activeConfigs) {
+                            if (currentBitMatrix[c.ch][i] === 1) val |= (1 << c.bit);
+                        }
+                        if (val !== currentHex) {
+                            if (i > 0) busSegments.push({ startIdx: segmentStart, endIdx: i, val: currentHex, str: "0x" + currentHex.toString(16).toUpperCase().padStart(2, '0') });
+                            currentHex = val;
+                            segmentStart = i;
+                        }
                     }
-                    if (val !== currentHex) {
-                        if (i > 0) busSegments.push({ startIdx: segmentStart, endIdx: i, val: currentHex });
-                        currentHex = val;
-                        segmentStart = i;
+                    busSegments.push({ startIdx: segmentStart, endIdx: depth, val: currentHex, str: "0x" + currentHex.toString(16).toUpperCase().padStart(2, '0') });
+                }
+
+                // 2. UART 解码算法 (LSB First)
+                if (uartConfig.enabled) {
+                    const chData = currentBitMatrix[uartConfig.ch];
+                    const ts_us = divMap[divRate.value].ts;
+                    const fs_hz = 1000000 / ts_us; // 仪器实际物理采样率
+                    const samplesPerBit = fs_hz / uartConfig.baud;
+
+                    if (samplesPerBit >= 2) { // 至少需2倍过采样才能勉强解算
+                        let i = 0;
+                        while (i < depth - samplesPerBit * 9) { // 留足一个字节的空间
+                            if (chData[i] === 1 && chData[i+1] === 0) { // 捕获 Start Bit (下降沿)
+                                const startIdx = i;
+                                let val = 0;
+                                // 跃过起始位，采样点偏移至 Data Bit 0 的正中央
+                                let sampleIdx = i + samplesPerBit * 1.5;
+                                for(let b = 0; b < 8; b++) {
+                                    let idx = Math.round(sampleIdx);
+                                    if(idx >= depth) break;
+                                    if(chData[idx] === 1) val |= (1 << b); // LSB 移位
+                                    sampleIdx += samplesPerBit;
+                                }
+                                const endIdx = Math.round(sampleIdx);
+                                // 简单字符转换(可显示 ASCII)
+                                let charStr = (val >= 32 && val <= 126) ? `'${String.fromCharCode(val)}'` : '';
+                                let hexStr = "0x" + val.toString(16).toUpperCase().padStart(2, '0');
+                                let finalStr = charStr ? `${hexStr} ${charStr}` : hexStr;
+
+                                uartSegments.push({ startIdx, endIdx, val, str: finalStr });
+                                i = endIdx; // 推进指针
+                            } else {
+                                i++;
+                            }
+                        }
+                    } else {
+                        console.warn("UART 解码警告: 当前仪器采样率过低，无法解析所设波特率。");
                     }
                 }
-                busSegments.push({ startIdx: segmentStart, endIdx: depth, val: currentHex });
-                if(uplotInst) uplotInst.redraw();
+
+                // 3. SPI 解码算法 (MSB First, 严格时序状态机)
+                if (spiConfig.enabled) {
+                    const csData = currentBitMatrix[spiConfig.cs];
+                    const sckData = currentBitMatrix[spiConfig.sck];
+                    const mosiData = currentBitMatrix[spiConfig.mosi];
+
+                    let inFrame = false;
+                    let bitCount = 0;
+                    let currentVal = 0;
+                    let startIdx = 0;
+                    let lastSck = spiConfig.cpol;
+
+                    for(let i = 0; i < depth; i++) {
+                        if (csData[i] === 0) { // CS 有效 (低电平)
+                            if (!inFrame) { inFrame = true; bitCount = 0; currentVal = 0; }
+
+                            const sckEdge = (lastSck === 0 && sckData[i] === 1) ? 1 :  // 上升沿
+                                            (lastSck === 1 && sckData[i] === 0) ? -1 : 0; // 下降沿
+
+                            lastSck = sckData[i];
+
+                            // 依据 CPOL 和 CPHA 确定数据采样沿 (1为上升, -1为下降)
+                            const sampleEdge = spiConfig.cpha === 0 ?
+                                (spiConfig.cpol === 0 ? 1 : -1) : // 奇数沿(首沿)采样
+                                (spiConfig.cpol === 0 ? -1 : 1);  // 偶数沿(尾沿)采样
+
+                            if (sckEdge === sampleEdge) {
+                                if (bitCount === 0) startIdx = i;
+                                // SPI 标准通常是 MSB First
+                                currentVal = (currentVal << 1) | mosiData[i];
+                                bitCount++;
+                                if (bitCount === 8) {
+                                    spiSegments.push({
+                                        startIdx, endIdx: i, val: currentVal,
+                                        str: "0x" + currentVal.toString(16).toUpperCase().padStart(2, '0')
+                                    });
+                                    bitCount = 0;
+                                    currentVal = 0;
+                                }
+                            }
+                        } else {
+                            inFrame = false;
+                            lastSck = spiConfig.cpol; // CS 无效时 SCK 回归空闲电平状态
+                        }
+                    }
+                }
+
+                if(uplotInst) uplotInst.redraw(); // 触发 Canvas 重绘钩子
             };
 
+            // ================== API 通信与控制逻辑 ==================
             const fetchPorts = async () => {
                 try {
                     const res = await fetch(`${API_BASE}/api/ports`);
@@ -349,7 +509,6 @@
 
             const sendControlFrame = async (cmdCode, silent = false) => {
                 if(!selectedPort.value) return;
-
                 if (isAutoRequesting.value && silent) return;
                 if (silent) isAutoRequesting.value = true;
 
@@ -375,30 +534,17 @@
                 }
 
                 try {
-                    const payload = {
-                        cmd: cmdCode,
-                        div: divRate.value,
-                        mode: triggerMode.value,
-                        p1: p1Param.value,
-                        p2: p2Param.value
-                    };
-                    const res = await fetch(`${API_BASE}/api/control`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
+                    const payload = { cmd: cmdCode, div: divRate.value, mode: triggerMode.value, p1: p1Param.value, p2: p2Param.value };
+                    const res = await fetch(`${API_BASE}/api/control`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     const data = await res.json();
                     if(data.status === "success") {
-                        if (!silent) {
-                            let cmdName = cmdCode === 1 ? "启动采样" : (cmdCode === 2 ? "中止等待" : "强制读取");
-                            ElementPlus.ElMessage.success(`[CMD ${cmdCode}] ${cmdName} 指令已下发`);
-                        }
+                        if (!silent) ElementPlus.ElMessage.success(`[CMD ${cmdCode}] 指令已下发`);
                     } else {
                         if (!silent) ElementPlus.ElMessage.error(`下发失败: ${data.msg}`);
                         if (captureMode.value === 'continuous') captureMode.value = 'single';
                     }
                 } catch (e) {
-                    if (!silent) ElementPlus.ElMessage.error('API 控制接口请求异常');
+                    if (!silent) ElementPlus.ElMessage.error('API 异常');
                     if (captureMode.value === 'continuous') captureMode.value = 'single';
                 } finally {
                     if (silent) isAutoRequesting.value = false;
@@ -406,13 +552,8 @@
             };
 
             const startCapture = () => sendControlFrame(1);
-
-            const stopCapture = () => {
-                captureMode.value = 'single';
-                sendControlFrame(2);
-            };
+            const stopCapture = () => { captureMode.value = 'single'; sendControlFrame(2); };
             const forceRead = () => sendControlFrame(3);
-
             const disconnectHardware = async () => {
                 captureMode.value = 'single';
                 try {
@@ -430,7 +571,6 @@
                     if(packet.type === "waveform" && uplotInst) {
                         const bitMatrix = packet.data;
                         const depth = bitMatrix[0].length;
-
                         currentBitMatrix = bitMatrix;
                         recalculateDecoder();
 
@@ -439,14 +579,10 @@
                         for(let ch=0; ch<8; ch++) {
                             plot_data.push(bitMatrix[ch].map(val => val + (ch * 2)));
                         }
-
                         uplotInst.setData(plot_data);
 
-                        // 【核心改造 4：前端状态机转变为纯监听者与单次截断器】
-                        // 如果是单次采样模式，在收到并画完这唯一的一帧后，立刻静默发送 CMD=02 关闭后端的软件阀门
-                        // 如果是连续采样模式，什么都不做，安静地接收后端瀑布般推过来的 WebSocket 数据并疯狂渲染即可
                         if (captureMode.value === 'single' && isRunning.value) {
-                            sendControlFrame(2, true); // true 代表静默发送，不弹窗打扰用户
+                            sendControlFrame(2, true);
                         }
                     }
                 };
@@ -454,6 +590,7 @@
                 ws.onclose = () => { captureMode.value = 'single'; };
             };
 
+            // ================== uPlot Canvas 图表引擎 ==================
             const initPlot = () => {
                 const colors = ['#F56C6C', '#E6A23C', '#5CB87A', '#1989FA', '#67C23A', '#909399', '#D4A4EB', '#00CED1'];
                 let seriesConfig = [ {} ];
@@ -463,20 +600,18 @@
                     seriesConfig.push({ stroke: colors[i], width: 2, paths: uPlot.paths.stepped({align: 1}) });
                 }
 
+                // 为三种解码总线预留 Y 轴刻度
                 yTicks.push([17.5, `DEC`]);
+                yTicks.push([19.5, `UART`]);
+                yTicks.push([21.5, `SPI`]);
 
                 const opts = {
                     width: document.getElementById('uplot-div').clientWidth,
                     height: document.getElementById('uplot-div').clientHeight,
                     padding: [20, 20, 10, 20],
                     scales: {
-                        x: {
-                            time: false,
-                            range: (u, min, max) => [min, max]
-                        },
-                        y: {
-                            range: [-1, 19]
-                        }
+                        x: { time: false, range: (u, min, max) => [min, max] },
+                        y: { range: [-1, 23] } // Y轴高度拓宽以适应三大解码器
                     },
                     series: seriesConfig,
                     axes: [
@@ -500,86 +635,73 @@
                                 const max = u.posToVal(u.select.left + u.select.width, 'x');
                                 const deltaSamples = Math.abs(max - min);
                                 if(deltaSamples > 0) {
-                                    // 提取真实的动态物理基准时钟 (Ts)
                                     const Ts_us = divMap[divRate.value].ts;
                                     const deltaT_us = deltaSamples * Ts_us;
-
-                                    // 智能时间单位自适应进位算法
-                                    let timeStr = "";
-                                    if (deltaT_us >= 1000000) {
-                                        timeStr = `${(deltaT_us / 1000000).toFixed(3)} s`;
-                                    } else if (deltaT_us >= 1000) {
-                                        timeStr = `${(deltaT_us / 1000).toFixed(3)} ms`;
-                                    } else {
-                                        timeStr = `${deltaT_us.toFixed(2)} μs`;
-                                    }
-
-                                    // 智能频率单位自适应进位算法
+                                    let timeStr = deltaT_us >= 1000000 ? `${(deltaT_us / 1000000).toFixed(3)} s` :
+                                                  (deltaT_us >= 1000 ? `${(deltaT_us / 1000).toFixed(3)} ms` : `${deltaT_us.toFixed(2)} μs`);
                                     const freq_kHz = 1000 / deltaT_us;
-                                    let freqStr = "";
-                                    if (freq_kHz >= 1000) {
-                                        freqStr = `${(freq_kHz / 1000).toFixed(3)} MHz`;
-                                    } else if (freq_kHz < 1) {
-                                        freqStr = `${(freq_kHz * 1000).toFixed(2)} Hz`;
-                                    } else {
-                                        freqStr = `${freq_kHz.toFixed(2)} kHz`;
-                                    }
-
-                                    document.getElementById('measure-result').innerHTML =
-                                        `📏 ΔX: ${deltaSamples.toFixed(1)} 样本 | ΔT: ${timeStr} | Freq: ${freqStr}`;
+                                    let freqStr = freq_kHz >= 1000 ? `${(freq_kHz / 1000).toFixed(3)} MHz` :
+                                                  (freq_kHz < 1 ? `${(freq_kHz * 1000).toFixed(2)} Hz` : `${freq_kHz.toFixed(2)} kHz`);
+                                    document.getElementById('measure-result').innerHTML = `📏 ΔX: ${deltaSamples.toFixed(1)} 样本 | ΔT: ${timeStr} | Freq: ${freqStr}`;
                                 }
                             }
                         ],
                         draw: [
+                            // 核心 Canvas 多轨道渲染钩子
                             (u) => {
-                                if (!decoderEnabled.value || busSegments.length === 0) return;
                                 const ctx = u.ctx;
                                 const PR = window.devicePixelRatio || 1;
 
-                                const yCenter = Math.round(u.valToPos(17.5, 'y') * PR) + u.bbox.top;
-                                const height = 28 * PR;
-                                const yTop = yCenter - height / 2;
+                                // 高阶函数：绘制特定轨道上的气泡阵列
+                                const drawDecoderTrack = (segments, yVal, strokeColor, fillColor) => {
+                                    if(segments.length === 0) return;
+                                    const yCenter = Math.round(u.valToPos(yVal, 'y') * PR) + u.bbox.top;
+                                    const height = 28 * PR;
+                                    const yTop = yCenter - height / 2;
 
-                                ctx.save();
-                                ctx.beginPath();
-                                ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
-                                ctx.clip();
-
-                                ctx.font = `bold ${16 * PR}px Consolas, monospace`;
-                                ctx.textAlign = "center";
-                                ctx.textBaseline = "middle";
-
-                                busSegments.forEach(seg => {
-                                    const x0 = Math.round(u.valToPos(seg.startIdx, 'x') * PR) + u.bbox.left;
-                                    const x1 = Math.round(u.valToPos(seg.endIdx, 'x') * PR) + u.bbox.left;
-                                    const width = x1 - x0;
-
-                                    if (width < 2 * PR) return;
-
-                                    ctx.fillStyle = "rgba(230, 162, 60, 0.2)";
-                                    ctx.strokeStyle = "#E6A23C";
-                                    ctx.lineWidth = 1 * PR;
-
+                                    ctx.save();
                                     ctx.beginPath();
-                                    const chamfer = Math.min(5 * PR, width / 2);
-                                    ctx.moveTo(x0, yCenter);
-                                    ctx.lineTo(x0 + chamfer, yTop);
-                                    ctx.lineTo(x1 - chamfer, yTop);
-                                    ctx.lineTo(x1, yCenter);
-                                    ctx.lineTo(x1 - chamfer, yTop + height);
-                                    ctx.lineTo(x0 + chamfer, yTop + height);
-                                    ctx.closePath();
+                                    ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
+                                    ctx.clip();
+                                    ctx.font = `bold ${14 * PR}px Consolas, monospace`;
+                                    ctx.textAlign = "center";
+                                    ctx.textBaseline = "middle";
 
-                                    ctx.fill();
-                                    ctx.stroke();
+                                    segments.forEach(seg => {
+                                        const x0 = Math.round(u.valToPos(seg.startIdx, 'x') * PR) + u.bbox.left;
+                                        const x1 = Math.round(u.valToPos(seg.endIdx, 'x') * PR) + u.bbox.left;
+                                        const width = x1 - x0;
+                                        if (width < 2 * PR) return; // 过于狭窄则忽略防糊屏
 
-                                    const hexText = "0x" + seg.val.toString(16).toUpperCase().padStart(2, '0');
-                                    if (width > ctx.measureText(hexText).width + 8 * PR) {
-                                        ctx.fillStyle = "#E5EAF3";
-                                        ctx.fillText(hexText, x0 + width / 2, yCenter);
-                                    }
-                                });
-                                ctx.restore();
+                                        ctx.fillStyle = fillColor;
+                                        ctx.strokeStyle = strokeColor;
+                                        ctx.lineWidth = 1 * PR;
+
+                                        ctx.beginPath();
+                                        const chamfer = Math.min(5 * PR, width / 2);
+                                        ctx.moveTo(x0, yCenter);
+                                        ctx.lineTo(x0 + chamfer, yTop);
+                                        ctx.lineTo(x1 - chamfer, yTop);
+                                        ctx.lineTo(x1, yCenter);
+                                        ctx.lineTo(x1 - chamfer, yTop + height);
+                                        ctx.lineTo(x0 + chamfer, yTop + height);
+                                        ctx.closePath();
+                                        ctx.fill();
+                                        ctx.stroke();
+
+                                        // 智能隐藏文字：只有当宽度容纳得下字符时才绘制
+                                        if (width > ctx.measureText(seg.str).width + 8 * PR) {
+                                            ctx.fillStyle = "#E5EAF3";
+                                            ctx.fillText(seg.str, x0 + width / 2, yCenter);
+                                        }
+                                    });
+                                    ctx.restore();
+                                };
+
+                                // 分别涂装并绘制三条轨道
+                                if(decoderEnabled.value) drawDecoderTrack(busSegments, 17.5, "#E6A23C", "rgba(230, 162, 60, 0.2)"); // 橙色 并行
+                                if(uartConfig.enabled)   drawDecoderTrack(uartSegments, 19.5, "#409EFF", "rgba(64, 158, 255, 0.2)"); // 蓝色 UART
+                                if(spiConfig.enabled)    drawDecoderTrack(spiSegments,  21.5, "#D4A4EB", "rgba(212, 164, 235, 0.2)"); // 紫色 SPI
                             }
                         ]
                     }
@@ -587,19 +709,17 @@
 
                 let initData = [Array.from({length: capturePoints.value}, (_, i) => i)];
                 for(let i=0; i<8; i++) initData.push(Array(capturePoints.value).fill(null));
-
                 uplotInst = new uPlot(opts, initData, document.getElementById('uplot-div'));
 
                 const mainViewDiv = document.querySelector('.main-view');
                 const plotContainerDiv = document.getElementById('uplot-div');
-                const resizeObserver = new ResizeObserver(() => {
+                new ResizeObserver(() => {
                     window.requestAnimationFrame(() => {
                         if (uplotInst && plotContainerDiv.clientWidth > 0) {
                             uplotInst.setSize({ width: plotContainerDiv.clientWidth, height: plotContainerDiv.clientHeight });
                         }
                     });
-                });
-                resizeObserver.observe(mainViewDiv);
+                }).observe(mainViewDiv);
 
                 const over = uplotInst.over;
                 over.addEventListener("wheel", (e) => {
@@ -616,10 +736,9 @@
             onMounted(() => { initPlot(); fetchPorts(); });
 
             return {
-                isSidebarOpen, isRightSidebarOpen, selectedPort, baudRate, isRunning, activePanels,
-                captureMode,
-                divRate, triggerMode, p1Param, p2Param, capturePoints, visibleChannels,
-                decoderEnabled, decoderConfig, recalculateDecoder,
+                isSidebarOpen, isRightSidebarOpen, selectedPort, baudRate, isRunning, activePanels, activeDecodePanels,
+                captureMode, divRate, triggerMode, p1Param, p2Param, capturePoints, visibleChannels,
+                decoderEnabled, decoderConfig, uartConfig, spiConfig, recalculateDecoder,
                 fetchPorts, startCapture, stopCapture, forceRead, disconnectHardware, selectAllChannels, updateChannelVisibility, resetView,
                 aiDialogOpen, aiLoading, renderedAiResult, runAIDiagnosis
             };
